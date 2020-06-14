@@ -1,5 +1,5 @@
 //
-// Travelling Salesman Problem Solver
+// Travelling Salesman Problem for Euclidean Space Solver
 //
 #include <cmath>
 #include <string>
@@ -79,10 +79,14 @@ vector<vec2> read_points(string input_file_path)
     return points;
 }
 
+// A rational quotient representing a pseudo-angle.
+// It can be compared with other pseudo-angles purely on integers (without need of floating-point arithmetics).
+// For instance, Slope{3, 4} represents a +30 degree inclination (right-up), where Slope{-10, 10} denotes -45 degrees fall (right-down).
+//
 struct Slope
 {
-    int p;
-    int q;
+    int p;  // y of the delta vector
+    int q;  // x of the delta vector (always positive)
 
     explicit Slope(const vec2& v) noexcept : p{v.y}, q{v.x} { assert(v.x > 0); }
     Slope(const vec2& left, const vec2& right) noexcept : Slope{right - left} {}
@@ -95,6 +99,8 @@ struct Slope
     friend bool operator>=(const Slope& a, const Slope& b) noexcept { return a.p * b.q >= b.p * a.q; }
 };
 
+// Given a set of points, returns an array of indices forming a convex hull of those points, that is a closed polygonal chain forming the smallest possible convex polygon containing all the points.
+//
 vector<int> find_convex_hull(const vector<vec2>& points)
 {
     auto ordered = vector<int>(points.size());
@@ -172,7 +178,7 @@ vector<int> find_convex_hull(const vector<vec2>& points)
     return top_trail;
 }
 
-/* An idea to be considered:
+/* An idea to be considered (distance computation caching):
 
     struct Dist
     {
@@ -208,12 +214,14 @@ vector<int> find_convex_hull(const vector<vec2>& points)
     };
 */
 
-vector<int> others(size_t count, vector<int>& trail)
+// Return an array of indices from [0..count> not containing indices from the specified set.
+//
+vector<int> others(const vector<int>& indices, size_t count)
 {
     auto present = vector<bool>(count);
 
     int present_count = 0;
-    for (int i : trail) {
+    for (int i : indices) {
         present[i] = true;
         ++present_count;
     }
@@ -230,21 +238,31 @@ vector<int> others(size_t count, vector<int>& trail)
     return others;
 }
 
+// Represent the best candidate for inclusion of a single trail edge.
+//
 struct EdgeBestInclusion
 {
-    double cost;
-    int index;
+    int index;      // An index of the best (point) candidate.
+    double cost;    // Cost of an inclusion if such occurrs, i.e. the value by with the trail length will increase.
 };
 
+// Given partial trail (in this algorithm: a convex hull), performs an iterative inclusion of all the other points.
+// This is a greedy algorithm, which merges a point nearest to any existing trail's edge.
+//
 void include_to_trail_greedily(const vector<vec2>& points, vector<int>& trail)
 {
     auto edges = vector<EdgeBestInclusion>(trail.size());
 
-    auto wild = others(points.size(), trail);
+    // Determine the pool of "wild" point indices, i.e. points which are not on a trail.
+    //
+    auto wild = others(trail, points.size());
 
+    // Lambda which updates edges[edge_index] for the specified edge_index.
+    // It iterates over all the "wild" points, finding the one with the least inclusion cost.
+    //
     auto find_best_point_for_edge_inclusion = [&](int edge_index) {
         auto& edge = edges[edge_index];
-        edge = EdgeBestInclusion{numeric_limits<double>::max(), -1};
+        edge = EdgeBestInclusion{-1, numeric_limits<double>::max()};
         const vec2& p0 = points[trail[edge_index]];
         const vec2& p1 = points[trail[(edge_index + 1) % (int)trail.size()]];
 
@@ -262,26 +280,42 @@ void include_to_trail_greedily(const vector<vec2>& points, vector<int>& trail)
         edge.cost -= dist(p0, p1);
     };
 
+    // For each edge of the trail, find the best candidates for trail inclusion.
+    //
     for (int edge_index = 0; edge_index < (int)edges.size(); ++edge_index) {
         find_best_point_for_edge_inclusion(edge_index);
     }
 
+    // With each iteration of this loop a single point is included into the trail.
+    //
     while (true)
     {
+        // Find the best candidate for inclusion from the best of all edges.
+        //
         auto best_iter = min_element(begin(edges), end(edges), [](const auto& e1, const auto& e2) {
             return e1.cost < e2.cost;
         });
         const int best_edge_index = (int)distance(begin(edges), best_iter);
         const int included_point_index = best_iter->index;
 
+        // Insert the best candidate into the trail (by inserting to both trail and edges).
+        //
         trail.insert(begin(trail) + best_edge_index + 1, included_point_index);
-        edges.insert(best_iter + 1, EdgeBestInclusion{{}, included_point_index});
+        edges.insert(best_iter + 1, EdgeBestInclusion{included_point_index, {}});  // Initializing EdgeBestInclusion with point index included_point_index effectively marks that edge for the forthcoming update.
+
+        // Remove that point from the "wild" point pool.
+        //
         wild.erase(find(begin(wild), end(wild), included_point_index));
 
+        // Once the last point from the "wild" pool has been merged into the trail, the job is done.
+        //
         if (wild.empty()) {
             break;
         }
 
+        // Update the best candidates only for those edges, which used to refer the included point as the best candidate for inclusion.
+        // This point became a part of the trail, so those edges need to find the next best candidate for they own.
+        //
         for (int edge_index = 0; edge_index < (int)edges.size(); ++edge_index) {
             if (edges[edge_index].index == included_point_index) {
                 find_best_point_for_edge_inclusion(edge_index);
@@ -290,6 +324,11 @@ void include_to_trail_greedily(const vector<vec2>& points, vector<int>& trail)
     }
 }
 
+// Performs a single optimization step given a complete trail.
+//
+// In practice, checks all the edge-to-edge combinations, looking for edge swaps which makes the trail shorter.
+// Returns true if a single swap has been made.
+//
 bool optimize(const vector<vec2>& points, vector<int>& trail)
 {
     assert(points.size() == trail.size());
@@ -340,6 +379,8 @@ bool optimize(const vector<vec2>& points, vector<int>& trail)
     return swapped;
 }
 
+// Computes the length of the specified trail.
+//
 double evaluate_trail(const vector<vec2>& points, const vector<int>& trail)
 {
     auto dists = vector<double>{};
@@ -354,20 +395,32 @@ double evaluate_trail(const vector<vec2>& points, const vector<int>& trail)
     return accumulate(begin(dists), end(dists), 0.0);
 }
 
-vector<int> solve_tsp(const vector<vec2>& points)
+// Solves the Travelling Salesman Problem for Euclidean Space.
+//
+// Given a set of points in 2D space, returns an index array of the same array, which designates the closed polygonal chain with possibly minimal length.
+//
+vector<int> solve_tsp(const vector<vec2>& points, bool verbose = true)
 {
-    cout << "Finding convex hull..." << endl;
+    if (points.size() <= 3)
+    {
+        if (verbose) cout << "Trivial solution" << endl;
+        auto trail = vector<int>(points.size());
+        iota(begin(trail), end(trail), 0);
+        return trail;
+    }
+
+    if (verbose) cout << "Finding convex hull..." << endl;
     auto trail = find_convex_hull(points);
 
-    cout << "Including all the nodes..." << endl;
+    if (verbose) cout << "Including all the nodes..." << endl;
     include_to_trail_greedily(points, trail);
 
     double trail_len = evaluate_trail(points, trail);
-    cout << "    length : " << trail_len << endl;
+    if (verbose) cout << "    length : " << trail_len << endl;
 
     for (int i = 1; true; ++i)
     {
-        cout << "Optimizing #" << i << "..." << endl;
+        if (verbose) cout << "Optimizing #" << i << "..." << endl;
 
         auto trail_copy = trail;
 
@@ -376,11 +429,11 @@ vector<int> solve_tsp(const vector<vec2>& points)
         double trail_copy_len = evaluate_trail(points, trail_copy);
 
         if (trail_copy_len >= trail_len || !changed) {
-            cout << "    length : " << trail_copy_len << " (discarding)" << endl;
+            if (verbose) cout << "    length : " << trail_copy_len << " (discarding)" << endl;
             break;
         }
         else {
-            cout << "    length : " << trail_copy_len << endl;
+            if (verbose) cout << "    length : " << trail_copy_len << endl;
             trail = move(trail_copy);
             trail_len = trail_copy_len;
         }
@@ -389,6 +442,8 @@ vector<int> solve_tsp(const vector<vec2>& points)
     return trail;
 }
 
+// Given a set of points, returns an axis-aligned bounding box spanning over all those points.
+//
 pair<vec2, vec2> minmax(const vector<vec2>& points)
 {
     auto lo = vec2{numeric_limits<int>::max(), numeric_limits<int>::max()};
@@ -405,6 +460,8 @@ pair<vec2, vec2> minmax(const vector<vec2>& points)
     return {lo, hi};
 }
 
+// Generates the HTML file containing SVG graph depicting found solution to the problem.
+//
 void save_svg(string output_file_path, const vector<vec2>& points, const vector<int>& trail)
 {
     const auto graph_size = (points.size() >= 4500) ? vec2{1600, 1600} : vec2{800, 800};
@@ -454,6 +511,8 @@ void save_svg(string output_file_path, const vector<vec2>& points, const vector<
     out << "</html>\n";
 }
 
+// The entry point of the program.
+//
 int main(int argc, char* argv[])
 {
     try

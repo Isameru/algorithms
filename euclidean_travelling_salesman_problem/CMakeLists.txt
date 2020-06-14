@@ -1,9 +1,9 @@
 
 cmake_minimum_required(VERSION 3.3...3.10)
 
-project(travelling_salesman_problem
+project(euclidean_travelling_salesman_problem
     VERSION     1.0
-    DESCRIPTION "Travelling Salesman Problem"
+    DESCRIPTION "Travelling Salesman Problem for Euclidean space"
     LANGUAGES   CXX)
 
 add_executable(tsp_gen tsp_gen.cpp)
